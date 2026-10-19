@@ -1,0 +1,10 @@
+# secrets and local files: never commit these
+.env
+*.env
+*.local.json
+credentials*.json
+*.key
+# system files
+.DS_Store
+Thumbs.db
+node_modules/
