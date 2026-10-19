@@ -1,0 +1,368 @@
+{
+  "name": "Article Loader (paste a table into the chatbot library)",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "# 📚 Article Loader\nLoads your help articles into the chatbot's library (Elasticsearch) from a pasted table.\n\n## How to use\n1. Click **Execute workflow**, then open the **Test URL** shown on the *Article Form* node.\n2. Prepare a table (Excel or Google Sheets) with the columns **title**, **content**, **url**, **category**, **tags**. Only title and content are required.\n3. Select all the cells, copy, and paste them into the form.\n4. Choose **Yes** to replace old articles (this deletes the samples), then submit.\n5. Change the address in the **Settings** node only if your Elasticsearch is somewhere else.",
+        "height": 300,
+        "width": 760,
+        "color": 4
+      },
+      "name": "Note - How to use",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -330
+      ],
+      "id": "b0c99249-e407-5636-8ad1-1738b1836e9f"
+    },
+    {
+      "parameters": {
+        "path": "load-articles",
+        "formTitle": "Load help articles",
+        "formDescription": "Paste a table copied from Excel or Google Sheets. The first row must contain the column names: title, content, url, category, tags (only title and content are required).",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Articles",
+              "fieldType": "textarea",
+              "requiredField": true,
+              "placeholder": "title\tcontent\turl\tcategory\ttags"
+            },
+            {
+              "fieldLabel": "Remove existing articles first?",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "No"
+                  },
+                  {
+                    "option": "Yes"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Article Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "9d6b1dae-aec8-5395-89b2-22c9951034e9",
+      "notes": "The page where you paste your articles.",
+      "id": "0cb04f4b-d5e0-5db8-87d4-ca9b3cf8cfcb"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5d0f1814-1194-59a7-90df-2638c10adef3",
+              "name": "esUrl",
+              "value": "http://host.docker.internal:9200",
+              "type": "string"
+            },
+            {
+              "id": "88ef9757-721b-51fb-ba7d-05359c5f9e09",
+              "name": "esIndex",
+              "value": "support-kb",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        300
+      ],
+      "notes": "Must match esUrl and esIndex in the chatbot's Config node.",
+      "id": "f9e1d924-3c0f-57ec-9f02-d7c0ebd931ce"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Articles: turns the pasted table (copied from Excel / Google Sheets / CSV) into Elasticsearch documents.\nconst form = $('Article Form').first().json;\nconst cfg = $('Settings').first().json;\nconst text = String(form['Articles'] ?? '').replace(/^\\uFEFF/, '');\nconst fail = (message) => [{ json: { ok: false, title: 'Nothing was loaded', message } }];\n\nconst firstLine = text.split(/\\r?\\n/)[0] || '';\nconst count = (c) => firstLine.split(c).length - 1;\nconst delim = count('\\t') > 0 ? '\\t' : count(';') > count(',') ? ';' : ',';\n\n// small CSV/TSV reader that understands \"quoted, cells\" and multi-line cells\nconst rows = [];\nlet row = [], cell = '', quoted = false;\nfor (let i = 0; i < text.length; i++) {\n  const ch = text[i];\n  if (quoted) {\n    if (ch === '\"') { if (text[i + 1] === '\"') { cell += '\"'; i++; } else quoted = false; }\n    else cell += ch;\n  } else if (ch === '\"' && cell === '') quoted = true;\n  else if (ch === delim) { row.push(cell); cell = ''; }\n  else if (ch === '\\n' || ch === '\\r') {\n    if (ch === '\\r' && text[i + 1] === '\\n') i++;\n    row.push(cell); cell = '';\n    if (row.some((c) => c.trim() !== '')) rows.push(row);\n    row = [];\n  } else cell += ch;\n}\nrow.push(cell);\nif (row.some((c) => c.trim() !== '')) rows.push(row);\n\nif (rows.length < 2) return fail('I found no articles. Paste the header row (title, content, url, category, tags) plus at least one article row.');\n\nconst header = rows[0].map((h) => h.trim().toLowerCase());\nconst find = (names) => header.findIndex((h) => names.includes(h));\nconst col = {\n  title: find(['title', 'question', 'name']),\n  content: find(['content', 'answer', 'text', 'body']),\n  url: find(['url', 'link']),\n  category: find(['category']),\n  tags: find(['tags', 'keywords']),\n};\nif (col.title < 0 || col.content < 0) return fail('The first row must contain the column names \"title\" and \"content\" (you can also use \"question\" and \"answer\").');\n\nconst get = (r, i) => (i >= 0 && r[i] !== undefined ? String(r[i]).replace(/\\s+/g, ' ').trim() : '');\nconst now = new Date().toISOString();\nconst lines = [];\nlet loaded = 0, skipped = 0;\nfor (const r of rows.slice(1)) {\n  const title = get(r, col.title).slice(0, 300);\n  const content = get(r, col.content).slice(0, 20000);\n  if (!title || !content) { skipped++; continue; }\n  if (loaded >= 500) { skipped++; continue; }\n  const doc = { title, content, updated_at: now };\n  const url = get(r, col.url);\n  if (/^https?:\\/\\//i.test(url)) doc.url = url;\n  const category = get(r, col.category);\n  if (category) doc.category = category;\n  const tags = get(r, col.tags);\n  if (tags) doc.tags = tags;\n  lines.push(JSON.stringify({ index: {} }), JSON.stringify(doc));\n  loaded++;\n}\nif (!loaded) return fail('Every row was missing a title or content, so nothing was loaded.');\n\nconst base = String(cfg.esUrl || '').trim().replace(/\\/+$/, '');\nconst index = String(cfg.esIndex || 'support-kb').trim();\nreturn [{ json: {\n  ok: true,\n  removeFirst: String(form['Remove existing articles first?'] || 'No').toLowerCase() === 'yes',\n  loaded, skipped,\n  bulkUrl: `${base}/${index}/_bulk?refresh=true`,\n  deleteUrl: `${base}/${index}/_delete_by_query?refresh=true&conflicts=proceed`,\n  bulkBody: lines.join('\\n') + '\\n',\n} }];\n"
+      },
+      "name": "Parse Articles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "notes": "Reads the pasted table (tab, comma or semicolon separated) and prepares the articles.",
+      "id": "280c5cb1-38d8-5605-80d9-b891fabf3849"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1b4cc857-9d3e-524b-a224-da0f3bb0346a",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "name": "Parse OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        300
+      ],
+      "notes": "TRUE: articles found. FALSE: show a clear problem message.",
+      "id": "0bce1c13-f2f5-589e-9993-f7ebfa3482d0"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "eabf9fae-8314-5473-8705-efd37614a6c2",
+              "leftValue": "={{ $json.removeFirst }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "name": "Remove First?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        220
+      ],
+      "notes": "TRUE when you chose Yes in the form.",
+      "id": "5471aba8-6d7a-57f0-a27c-379a18958f6b"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.deleteUrl }}",
+        "sendBody": true,
+        "options": {
+          "timeout": 60000
+        },
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: { match_all: {} } }) }}"
+      },
+      "name": "Delete Old Articles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        140
+      ],
+      "notes": "Deletes every article currently in the index.",
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "id": "84436dcc-d7e9-5d71-a1b1-c410fe01abbc"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Parse Articles').first().json.bulkUrl }}",
+        "sendBody": true,
+        "options": {
+          "timeout": 60000
+        },
+        "contentType": "raw",
+        "rawContentType": "application/x-ndjson",
+        "body": "={{ $('Parse Articles').first().json.bulkBody }}"
+      },
+      "name": "Upload Articles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        300
+      ],
+      "notes": "Sends all articles to Elasticsearch in one request.",
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true,
+      "id": "ac0479ed-321d-5ec0-bd03-0bd0f995a8f2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check Result: tells the person clearly whether the upload worked.\nconst p = $('Parse Articles').first().json;\nconst res = $input.first().json || {};\nif (res.error || res.errors === true || !Array.isArray(res.items)) {\n  const items = Array.isArray(res.items) ? res.items : [];\n  const bad = items.find((i) => i.index && i.index.error);\n  const why = bad ? (bad.index.error.reason || bad.index.error.type) : (typeof res.error === 'string' ? res.error : 'Elasticsearch did not accept the articles.');\n  return [{ json: { title: 'Upload failed', message: 'Elasticsearch said: ' + why + '. Check that Docker and Elasticsearch are running and that the address in the Settings node is right.' } }];\n}\nconst ok = res.items.filter((i) => i.index && i.index.status >= 200 && i.index.status < 300).length;\nconst extra = p.skipped ? ` ${p.skipped} row(s) were skipped (missing title or content).` : '';\nreturn [{ json: { title: 'Done!', message: `${ok} article(s) are now in your bot's library.${extra} Ask the chatbot a question about them to test.` } }];\n"
+      },
+      "name": "Check Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ],
+      "notes": "Checks that Elasticsearch accepted the articles.",
+      "id": "a8a54b0d-d92c-5c45-b282-07b64fb2887e"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "={{ $json.title }}",
+        "completionMessage": "={{ $json.message }}",
+        "options": {}
+      },
+      "name": "Show Result",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        300
+      ],
+      "notes": "The final page you see in the browser.",
+      "id": "52b603ba-0671-5e46-85b6-504bac17c74d"
+    }
+  ],
+  "connections": {
+    "Article Form": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Parse Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Articles": {
+      "main": [
+        [
+          {
+            "node": "Parse OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse OK?": {
+      "main": [
+        [
+          {
+            "node": "Remove First?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Show Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove First?": {
+      "main": [
+        [
+          {
+            "node": "Delete Old Articles",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Upload Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Old Articles": {
+      "main": [
+        [
+          {
+            "node": "Upload Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Articles": {
+      "main": [
+        [
+          {
+            "node": "Check Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Result": {
+      "main": [
+        [
+          {
+            "node": "Show Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

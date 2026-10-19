@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acme Inc. Help Center (chat widget demo)</title>
+<style>
+  :root {
+    --ink: #0f2a33;
+    --muted: #55707a;
+    --paper: #ffffff;
+    --mist: #eaf2f2;
+    --line: #d3e1e3;
+    --accent: #0e7c86;
+    --accent-ink: #ffffff;
+    --signal: #b86a00;
+    --signal-bg: #fff3dc;
+    --page: #f6fafa;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e6f1f2;
+      --muted: #93adb3;
+      --paper: #12262c;
+      --mist: #1b343b;
+      --line: #28444c;
+      --accent: #3bb5c0;
+      --accent-ink: #06222a;
+      --signal: #f2b45a;
+      --signal-bg: #3a2c12;
+      --page: #0c1c21;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font-family: "Atkinson Hyperlegible", "Segoe UI", system-ui, -apple-system, sans-serif;
+    line-height: 1.5;
+  }
+  .demo { max-width: 640px; padding: 12vh 24px 0 8vw; }
+  .demo h1 { font-size: clamp(1.8rem, 4vw, 2.6rem); line-height: 1.15; margin: 0 0 12px; }
+  .demo p { color: var(--muted); max-width: 52ch; margin: 0; }
+
+  /* ---------- widget ---------- */
+  #cw-bubble {
+    position: fixed; right: 20px; bottom: 20px; z-index: 9998;
+    width: 58px; height: 58px; border-radius: 50%; border: 0; cursor: pointer;
+    background: var(--accent); color: var(--accent-ink);
+    box-shadow: 0 6px 20px rgba(0,0,0,.25);
+    display: grid; place-items: center;
+  }
+  #cw-bubble svg { width: 26px; height: 26px; }
+  #cw-panel {
+    position: fixed; right: 20px; bottom: 90px; z-index: 9999;
+    width: min(380px, calc(100vw - 24px)); height: min(560px, calc(100vh - 110px));
+    background: var(--paper); border: 1px solid var(--line); border-radius: 18px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.28);
+    display: none; flex-direction: column; overflow: hidden;
+    transform-origin: bottom right;
+  }
+  #cw-panel.open { display: flex; animation: cw-open .22s ease-out; }
+  @keyframes cw-open { from { opacity: 0; transform: translateY(10px) scale(.97); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { #cw-panel.open { animation: none; } }
+
+  .cw-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: var(--accent); color: var(--accent-ink); }
+  .cw-avatar { width: 38px; height: 38px; border-radius: 50%; background: rgba(255,255,255,.22); display: grid; place-items: center; font-weight: 700; }
+  .cw-title { font-weight: 700; line-height: 1.2; }
+  .cw-sub { font-size: .8rem; opacity: .85; }
+  .cw-close { margin-left: auto; background: transparent; border: 0; color: inherit; font-size: 1.5rem; cursor: pointer; line-height: 1; padding: 4px 8px; }
+
+  #cw-log { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; background: var(--page); }
+  .cw-msg { max-width: 86%; padding: 10px 13px; border-radius: 14px; white-space: pre-wrap; word-wrap: break-word; }
+  .cw-msg.bot { align-self: flex-start; background: var(--paper); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .cw-msg.user { align-self: flex-end; background: var(--accent); color: var(--accent-ink); border-bottom-right-radius: 4px; }
+  .cw-msg.err { align-self: flex-start; background: var(--signal-bg); color: var(--signal); border: 1px solid var(--signal); }
+  .cw-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .cw-sources a { font-size: .8rem; color: var(--accent); background: var(--mist); border: 1px solid var(--line); padding: 3px 9px; border-radius: 999px; text-decoration: none; }
+  .cw-sources a:hover { text-decoration: underline; }
+  .cw-note { margin-top: 8px; font-size: .8rem; color: var(--signal); }
+  .cw-typing { align-self: flex-start; display: flex; gap: 4px; padding: 12px 14px; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; }
+  .cw-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: cw-dot 1s infinite ease-in-out; }
+  .cw-typing i:nth-child(2) { animation-delay: .15s; } .cw-typing i:nth-child(3) { animation-delay: .3s; }
+  @keyframes cw-dot { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .cw-typing i { animation: none; opacity: .6; } }
+
+  #cw-ideas { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 10px; background: var(--page); }
+  #cw-ideas button { font: inherit; font-size: .85rem; cursor: pointer; background: var(--paper); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; }
+  #cw-ideas button:hover { border-color: var(--accent); }
+
+  #cw-form { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); background: var(--paper); }
+  #cw-input { flex: 1; font: inherit; color: var(--ink); background: var(--page); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  #cw-send { font: inherit; font-weight: 700; cursor: pointer; border: 0; border-radius: 10px; padding: 0 16px; background: var(--accent); color: var(--accent-ink); }
+  #cw-send:disabled { opacity: .5; cursor: not-allowed; }
+  button:focus-visible, a:focus-visible, #cw-input:focus-visible { outline: 3px solid var(--signal); outline-offset: 2px; }
+</style>
+</head>
+<body>
+
+<main class="demo">
+  <h1>Acme Inc. Help Center</h1>
+  <p>This is a demo page. Click the chat bubble in the bottom-right corner and ask a question about passwords, shipping, refunds or support.</p>
+</main>
+
+<button id="cw-bubble" type="button" aria-label="Open chat" aria-expanded="false" aria-controls="cw-panel">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.5A8 8 0 1 1 21 12z"/></svg>
+</button>
+
+<section id="cw-panel" role="dialog" aria-label="Chat with support">
+  <header class="cw-head">
+    <div class="cw-avatar" id="cw-avatar" aria-hidden="true">A</div>
+    <div><div class="cw-title" id="cw-title">Aria</div><div class="cw-sub" id="cw-sub">Support assistant</div></div>
+    <button class="cw-close" id="cw-close" type="button" aria-label="Close chat">&times;</button>
+  </header>
+  <div id="cw-log" role="log" aria-live="polite"></div>
+  <div id="cw-ideas"></div>
+  <form id="cw-form" autocomplete="off">
+    <input id="cw-input" type="text" maxlength="1000" aria-label="Your question">
+    <button id="cw-send" type="submit">Send</button>
+  </form>
+</section>
+
+<script>
+/* =====================================================
+   SETTINGS: change only this block
+   ===================================================== */
+const CONFIG = {
+  // The Production URL of your n8n "Chat Webhook" node (the workflow must be Published).
+  API_URL: "http://localhost:5678/webhook/support-chatbot",
+  // Leave empty if the webhook Authentication is set to None (local demo).
+  // Never put a real secret key in a page that is public.
+  API_KEY: "",
+  BOT_NAME: "Aria",
+  SUBTITLE: "Support assistant",
+  WELCOME: "Hi! I'm Aria. Ask me about passwords, shipping, refunds or how to reach support.",
+  PLACEHOLDER: "Type your question...",
+  IDEAS: ["How long does shipping take?", "What is your refund policy?", "How do I reset my password?"],
+  TIMEOUT_SECONDS: 60
+};
+
+/* =====================================================
+   Widget code (no need to edit below)
+   ===================================================== */
+const $ = (id) => document.getElementById(id);
+const panel = $("cw-panel"), bubble = $("cw-bubble"), log = $("cw-log"), input = $("cw-input"), sendBtn = $("cw-send");
+const history = [];
+const sessionId = "w" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+let busy = false;
+
+$("cw-title").textContent = CONFIG.BOT_NAME;
+$("cw-sub").textContent = CONFIG.SUBTITLE;
+$("cw-avatar").textContent = CONFIG.BOT_NAME.charAt(0).toUpperCase();
+input.placeholder = CONFIG.PLACEHOLDER;
+
+function togglePanel(open) {
+  panel.classList.toggle("open", open);
+  bubble.setAttribute("aria-expanded", String(open));
+  bubble.setAttribute("aria-label", open ? "Close chat" : "Open chat");
+  if (open) input.focus(); else bubble.focus();
+}
+bubble.addEventListener("click", () => togglePanel(!panel.classList.contains("open")));
+$("cw-close").addEventListener("click", () => togglePanel(false));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && panel.classList.contains("open")) togglePanel(false); });
+
+function addMessage(kind, text, data) {
+  const el = document.createElement("div");
+  el.className = "cw-msg " + kind;
+  el.textContent = text;
+  if (data && Array.isArray(data.sources) && data.sources.length) {
+    const box = document.createElement("div");
+    box.className = "cw-sources";
+    data.sources.forEach((s) => {
+      if (!s || !/^https?:\/\//i.test(s.url || "")) return;
+      const a = document.createElement("a");
+      a.href = s.url; a.target = "_blank"; a.rel = "noopener noreferrer";
+      a.textContent = s.title || "Read more";
+      box.appendChild(a);
+    });
+    if (box.children.length) el.appendChild(box);
+  }
+  if (data && data.escalated) {
+    const note = document.createElement("div");
+    note.className = "cw-note";
+    note.textContent = "Our support team has been notified.";
+    el.appendChild(note);
+  }
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+}
+
+function showTyping(on) {
+  const old = $("cw-typing");
+  if (old) old.remove();
+  if (!on) return;
+  const t = document.createElement("div");
+  t.id = "cw-typing"; t.className = "cw-typing";
+  t.innerHTML = "<i></i><i></i><i></i>";
+  log.appendChild(t);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function ask(question) {
+  if (busy || !question.trim()) return;
+  busy = true; sendBtn.disabled = true;
+  $("cw-ideas").style.display = "none";
+  addMessage("user", question);
+  showTyping(true);
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CONFIG.TIMEOUT_SECONDS * 1000);
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (CONFIG.API_KEY) headers["X-API-Key"] = CONFIG.API_KEY;
+    const res = await fetch(CONFIG.API_URL, {
+      method: "POST", headers, signal: ctrl.signal,
+      body: JSON.stringify({ question, sessionId, history: history.slice(-6) })
+    });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* not JSON */ }
+    showTyping(false);
+    if (res.ok && data && data.reply) {
+      addMessage("bot", data.reply, data);
+      history.push({ role: "user", content: question }, { role: "assistant", content: data.reply });
+    } else if (data && data.message) {
+      addMessage("err", data.message);
+    } else if (res.status === 401 || res.status === 403) {
+      addMessage("err", "The chat key is missing or wrong. Check API_KEY in the settings, or set the webhook Authentication to None for a local demo.");
+    } else if (res.status === 404) {
+      addMessage("err", "The chat address was not found. Publish the n8n workflow and check API_URL in the settings.");
+    } else {
+      addMessage("err", "Something went wrong on the server (code " + res.status + "). Look at the n8n Executions tab.");
+    }
+  } catch (err) {
+    showTyping(false);
+    addMessage("err", err.name === "AbortError"
+      ? "The assistant took too long to answer. Please try again."
+      : "Can't reach the assistant. Check that n8n is running and the workflow is published.");
+  } finally {
+    clearTimeout(timer);
+    busy = false; sendBtn.disabled = false; input.focus();
+  }
+}
+
+$("cw-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const q = input.value.trim();
+  input.value = "";
+  ask(q);
+});
+
+CONFIG.IDEAS.forEach((q) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = q;
+  b.addEventListener("click", () => ask(q));
+  $("cw-ideas").appendChild(b);
+});
+addMessage("bot", CONFIG.WELCOME);
+</script>
+</body>
+</html>
